@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # --- Base de Datos PostgreSQL ---
+  db:
+    image: postgres:14-alpine
+    container_name: postgres_db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      # Monta el script de inicialización para crear la tabla al arrancar
+      - ./infra/schema.sql:/docker-entrypoint-initdb.d/init.sql
+      # Monta un volumen para persistir los datos de la base de datos
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Expone el puerto de la DB al host (opcional, útil para depuración con un cliente SQL)
+      - "5432:5432"
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Servidor Web 1 (Inglés) ---
+  web1:
+    build:
+      context: ./web_app
+    container_name: web_app_en
+    env_file:
+      - ./.env
+    environment:
+      - LANG=en
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  # --- Servidor Web 2 (Español) ---
+  web2:
+    build:
+      context: ./web_app
+    container_name: web_app_es
+    env_file:
+      - ./.env
+    environment:
+      - LANG=es
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  # --- Servicio de Estadísticas ---
+  stats:
+    build:
+      context: ./stats_app
+    container_name: stats_app
+    env_file:
+      - ./.env
+    volumes:
+      - ./infra:/home/appuser/app/infra
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-net
+    # No exponemos puertos, ya que solo se accede internamente o por demanda
+
+  # --- Balanceador de Carga ---
+  load-balancer:
+    build:
+      context: ./load_balancer
+    container_name: load_balancer
+    environment:
+      # Pasamos los nombres de los servicios web como backends
+      - BACKEND_SERVERS=http://web1:8000,http://web2:8000
+    ports:
+      # El único puerto expuesto al exterior
+      - "80:80"
+      # Puerto para métricas de Prometheus (opcional)
+      - "8100:8000" 
+    depends_on:
+      - web1
+      - web2
+    networks:
+      - app-net
+
+# --- Volúmenes y Redes ---
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  app-net:
+    driver: bridge

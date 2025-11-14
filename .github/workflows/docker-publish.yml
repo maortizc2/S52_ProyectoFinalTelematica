@@ -1,0 +1,74 @@
+# Nombre del workflow que aparecerá en la pestaña "Actions" de GitHub
+name: Docker Publish CI
+
+# --- Disparador (Trigger) ---
+# Este workflow se ejecuta en cada push a la rama 'main'
+on:
+  push:
+    branches: [ "main" ]
+
+# --- Trabajos (Jobs) ---
+# Define los trabajos que se ejecutarán. Se pueden ejecutar en paralelo.
+jobs:
+  # --- Trabajo para construir y publicar la imagen de la Web App ---
+  build-and-push-web:
+    runs-on: ubuntu-latest # Usar la última versión de Ubuntu como sistema operativo del ejecutor
+    steps:
+      # 1. Descargar el código del repositorio
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Iniciar sesión en Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 3. Construir y publicar la imagen Docker
+      - name: Build and push Web App image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web_app # Directorio que contiene el Dockerfile
+          push: true # Publicar la imagen en el registro
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/web_app:latest # Nombre y etiqueta de la imagen
+
+  # --- Trabajo para construir y publicar la imagen de la Stats App ---
+  build-and-push-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Stats App image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./stats_app
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/stats_app:latest
+
+  # --- Trabajo para construir y publicar la imagen del Load Balancer ---
+  build-and-push-balancer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Load Balancer image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./load_balancer
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/load_balancer:latest

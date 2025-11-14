@@ -1,24 +1,108 @@
-    <!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8">
-    <title>{{ title }}</title>
-    </head>
-    <body>
-    <h1>{{ title }}</h1>
-    <form action="/register" method="post">
-        <label>{{ "Name" if lang.startswith("en") else "Nombre" }}: <input name="name" required></label><br>
-        <label>{{ "Comuna (1-10)" if lang.startswith("en") else "Comuna (1-10)" }}: 
-        <input name="comuna" type="number" min="1" max="10" value="1" required>
-        </label><br>
-        <label>{{ "Carrera" if lang.startswith("en") else "Carrera" }}:
-        <select name="carrera">
-            <option>Medicina</option><option>Ingeniería</option><option>Abogacía</option><option>Licenciatura</option>
-        </select>
-        </label><br>
-        <button type="submit">{{ "Register" if lang.startswith("en") else "Registrar" }}</button>
-    </form>
-    <hr>
-    <p>{{ "Or use API" if lang.startswith("en") else "O use la API" }}</p>
-    </body>
-    </html>
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ texts.title }}</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 40px auto; padding: 0 20px; background-color: #f8f9fa; }
+        .container { background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1 { color: #007bff; text-align: center; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; }
+        input[type="text"], input[type="number"], select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }
+        input:focus, select:focus { border-color: #007bff; outline: none; }
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        .btn:hover { background-color: #0056b3; }
+        .response { margin-top: 20px; padding: 12px; border-radius: 4px; text-align: center; font-weight: 500; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .footer { text-align: center; margin-top: 20px; color: #6c757d; font-size: 0.9em; }
+        .lang-badge { position: absolute; top: 15px; right: 15px; background-color: #6c757d; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.8em; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <div class="lang-badge">{{ lang }}</div>
+    <div class="container">
+        <h1>{{ texts.header }}</h1>
+        <form id="registrationForm">
+            <div class="form-group">
+                <label for="name">{{ texts.name_label }}</label>
+                <input type="text" id="name" name="name" required>
+            </div>
+            <div class="form-group">
+                <label for="comuna">{{ texts.comuna_label }}</label>
+                <input type="number" id="comuna" name="comuna" min="1" max="10" required>
+            </div>
+            <div class="form-group">
+                <label for="carrera">{{ texts.carrera_label }}</label>
+                <select id="carrera" name="carrera" required>
+                    {% for carrera in carreras %}
+                    <option value="{{ carrera }}">{{ carrera }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn">{{ texts.submit_button }}</button>
+        </form>
+        <div id="response" class="response" style="display:none;"></div>
+    </div>
+    <div class="footer">
+        Servidor: {{ lang }}
+    </div>
+
+    <script>
+        document.getElementById('registrationForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            
+            const form = event.target;
+            const formData = new FormData(form);
+            const responseDiv = document.getElementById('response');
+
+            responseDiv.style.display = 'none';
+            responseDiv.className = 'response';
+
+            try {
+                const response = await fetch('/register', {
+                    method: 'POST',
+                    body: new URLSearchParams(formData)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    responseDiv.textContent = result.message;
+                    responseDiv.classList.add('success');
+                    form.reset();
+                } else {
+                    responseDiv.textContent = result.error || 'An unknown error occurred.';
+                    responseDiv.classList.add('error');
+                }
+            } catch (error) {
+                responseDiv.textContent = 'A network error occurred.';
+                responseDiv.classList.add('error');
+            } finally {
+                responseDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

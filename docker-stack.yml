@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  # --- Base de Datos PostgreSQL ---
+  db:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_DB=${POSTGRES_DB}
+      # La contraseña se lee desde el Docker Secret
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    volumes:
+      # El schema se puede manejar con un job o un contenedor de inicialización,
+      # pero para simplicidad, asumimos que la DB se inicializa una vez.
+      # El volumen de datos es crucial para la persistencia.
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # Forzar a que la DB se ejecute solo en el nodo con esta etiqueta
+          - node.labels.role == database
+      restart_policy:
+        condition: on-failure
+
+  # --- Servidor Web 1 (Inglés) ---
+  web1:
+    image: <TU_USUARIO_DOCKERHUB>/web_app:latest
+    environment:
+      - LANG=en
+      - DATABASE_URL=postgresql://${POSTGRES_USER}@db:5432/${POSTGRES_DB}?password_file=/run/secrets/postgres_password_db_url
+    secrets:
+      - source: postgres_password
+        target: postgres_password_db_url
+    depends_on:
+      - db
+    networks:
+      - app-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == frontend
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.web1.rule=Host(`<TU_DOMINIO>`) && PathPrefix(`/`)"
+        - "traefik.http.routers.web1.entrypoints=websecure"
+        - "traefik.http.routers.web1.tls.certresolver=myresolver"
+        - "traefik.http.services.web1.loadbalancer.server.port=8000"
+
+  # --- Servidor Web 2 (Español) ---
+  web2:
+    image: <TU_USUARIO_DOCKERHUB>/web_app:latest
+    environment:
+      - LANG=es
+      - DATABASE_URL=postgresql://${POSTGRES_USER}@db:5432/${POSTGRES_DB}?password_file=/run/secrets/postgres_password_db_url
+    secrets:
+      - source: postgres_password
+        target: postgres_password_db_url
+    depends_on:
+      - db
+    networks:
+      - app-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == frontend
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.web2.rule=Host(`<TU_DOMINIO>`) && PathPrefix(`/`)"
+        - "traefik.http.routers.web2.entrypoints=websecure"
+        - "traefik.http.routers.web2.tls.certresolver=myresolver"
+        - "traefik.http.services.web2.loadbalancer.server.port=8000"
+
+  # --- Servicio de Estadísticas ---
+  stats:
+    image: <TU_USUARIO_DOCKERHUB>/stats_app:latest
+    env_file:
+      - ./.env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}@db:5432/${POSTGRES_DB}?password_file=/run/secrets/postgres_password_db_url
+    secrets:
+      - source: postgres_password
+        target: postgres_password_db_url
+    depends_on:
+      - db
+    networks:
+      - app-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == processing
+      restart_policy:
+        condition: on-failure
+
+  # --- Traefik (Reemplaza a load-balancer) ---
+  traefik:
+    image: traefik:v2.11
+    command:
+      - "--api.insecure=true" # Habilita el dashboard de Traefik en el puerto 8080 (solo para depuración)
+      - "--providers.docker.swarmMode=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=<TU_EMAIL_PARA_LETSENCRYPT>"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Puerto para el dashboard (opcional, no exponer en producción sin seguridad)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-public-certificates:/letsencrypt
+    networks:
+      - app-net
+    deploy:
+      mode: global # Asegura que Traefik corra en cada nodo manager, aunque aquí solo tenemos uno
+      placement:
+        constraints:
+          - node.role == manager
+
+# --- Volúmenes, Redes y Secretos ---
+volumes:
+  postgres_data:
+    driver: local
+  traefik-public-certificates:
+    driver: local
+
+networks:
+  app-net:
+    driver: overlay
+    attachable: true
+
+secrets:
+  postgres_password:
+    external: true

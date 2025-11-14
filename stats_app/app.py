@@ -1,122 +1,156 @@
-from flask import Flask, request, jsonify
-import os, io, base64
-import datetime
+import os
+import psycopg2
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import io
 import smtplib
-from email.message import EmailMessage
-from functools import wraps
-import json
-from sqlalchemy import create_engine
+import boto3
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+from botocore.exceptions import ClientError
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
+
 app = Flask(__name__)
 
-DB_HOST = os.getenv("DB_HOST", "db")
-DB_PORT = int(os.getenv("DB_PORT", 5432))
-DB_NAME = os.getenv("DB_NAME", "appdb")
-DB_USER = os.getenv("DB_USER", "appuser")
-DB_PASS = os.getenv("DB_PASS", "apppass")
+# --- Configuración General ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "mailtrap") # 'mailtrap' o 'ses'
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "ialondonoo@eafit.edu.co")
 
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS", "adminpass")
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.mailtrap.io")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
+# --- Configuración Mailtrap ---
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = os.getenv("SMTP_PORT", 587)
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+SENDER_EMAIL_SMTP = "stats-noreply@my-project.com"
 
-def get_conn():
-    return psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASS)
+# --- Configuración AWS SES ---
+AWS_REGION = os.getenv("AWS_REGION")
+SENDER_EMAIL_SES = os.getenv("SENDER_EMAIL_SES") # Debe ser una identidad verificada en SES
 
-def check_auth(u, p):
-    return u == ADMIN_USER and p == ADMIN_PASS
+def get_db_data():
+    """Obtiene los datos de la base de datos y los devuelve como un DataFrame de Pandas."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        # Consulta para contar registros por carrera
+        query = "SELECT carrera, COUNT(*) as count FROM users GROUP BY carrera ORDER BY count DESC;"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df
+    except Exception as e:
+        print(f"Error al conectar o consultar la BD: {e}")
+        return None
 
-def requires_auth(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
-        return f(*args, **kwargs)
-    return decorated
+def create_stats_chart(df):
+    """Genera un gráfico de barras a partir de un DataFrame y lo devuelve como bytes."""
+    if df.empty:
+        return None
+        
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    df.plot(kind='bar', x='carrera', y='count', ax=ax, legend=False, color='skyblue')
+    
+    ax.set_title('Registros por Carrera', fontsize=16)
+    ax.set_xlabel('Carrera', fontsize=12)
+    ax.set_ylabel('Número de Registros', fontsize=12)
+    ax.tick_params(axis='x', rotation=45)
+    plt.tight_layout()
+    
+    # Guardar el gráfico en un buffer en memoria
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
-def fetch_data():
-    conn = get_conn()
-    engine = create_engine(f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
-    df = pd.read_sql("SELECT name, comuna, date, carrera, lang FROM users", engine, parse_dates=["date"])
-    conn.close()
-    return df
+def send_email_mailtrap(attachment_buffer):
+    """Envía el correo usando SMTP (Mailtrap)."""
+    if not all([SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS]):
+        raise ValueError("Faltan variables de entorno para Mailtrap (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS)")
 
-def build_plots(df):
-    buf_images = []
-    # Example plot: counts per carrera
-    fig1 = plt.figure()
-    df['carrera'] = df['carrera'].fillna('Unknown')
-    df['carrera'].value_counts().plot(kind='bar', title='Counts per Carrera')
-    fig1.tight_layout()
-    img_buf1 = io.BytesIO()
-    fig1.savefig(img_buf1, format='png')
-    img_buf1.seek(0)
-    buf_images.append(('carrera.png', img_buf1.read()))
-    plt.close(fig1)
+    msg = MIMEMultipart()
+    msg['From'] = SENDER_EMAIL_SMTP
+    msg['To'] = RECIPIENT_EMAIL
+    msg['Subject'] = "Reporte de Estadísticas de Usuarios"
+    
+    msg.attach(MIMEText("Adjunto encontrarás el reporte de estadísticas de registros por carrera.", 'plain'))
+    
+    part = MIMEApplication(attachment_buffer.read(), Name="stats_report.png")
+    part['Content-Disposition'] = 'attachment; filename="stats_report.png"'
+    msg.attach(part)
+    
+    with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.send_message(msg)
+    print("Correo enviado exitosamente a través de Mailtrap.")
 
-    # Example plot: counts per comuna
-    fig2 = plt.figure()
-    df['comuna'].value_counts().sort_index().plot(kind='bar', title='Counts per Comuna')
-    fig2.tight_layout()
-    img_buf2 = io.BytesIO()
-    fig2.savefig(img_buf2, format='png')
-    img_buf2.seek(0)
-    buf_images.append(('comuna.png', img_buf2.read()))
-    plt.close(fig2)
+def send_email_ses(attachment_buffer):
+    """Envía el correo usando AWS SES."""
+    if not all([AWS_REGION, SENDER_EMAIL_SES]):
+        raise ValueError("Faltan variables de entorno para AWS SES (AWS_REGION, SENDER_EMAIL_SES)")
 
-    return buf_images
+    client = boto3.client('ses', region_name=AWS_REGION)
+    
+    msg = MIMEMultipart()
+    msg['Subject'] = "Reporte de Estadísticas de Usuarios"
+    msg['From'] = SENDER_EMAIL_SES
+    msg['To'] = RECIPIENT_EMAIL
+    
+    msg.attach(MIMEText("Adjunto encontrarás el reporte de estadísticas de registros por carrera.", 'plain'))
+    
+    part = MIMEApplication(attachment_buffer.read(), Name="stats_report.png")
+    part['Content-Disposition'] = 'attachment; filename="stats_report.png"'
+    msg.attach(part)
 
-def build_pdf(images):
-    pdf_buf = io.BytesIO()
-    with PdfPages(pdf_buf) as pdf:
-        for name, img_bytes in images:
-            img = plt.imread(io.BytesIO(img_bytes))
-            fig = plt.figure(figsize=(8,6))
-            plt.imshow(img)
-            plt.axis('off')
-            pdf.savefig(fig)
-            plt.close(fig)
-    pdf_buf.seek(0)
-    return pdf_buf
+    try:
+        response = client.send_raw_email(
+            Source=SENDER_EMAIL_SES,
+            Destinations=[RECIPIENT_EMAIL],
+            RawMessage={'Data': msg.as_string()}
+        )
+        print(f"Correo enviado exitosamente a través de AWS SES. Message ID: {response['MessageId']}")
+    except ClientError as e:
+        print(f"Error al enviar correo con SES: {e.response['Error']['Message']}")
+        raise
 
-def send_email(to_email, subject, body, attachments):
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = os.getenv("EMAIL_FROM", "no-reply@example.com")
-    msg['To'] = to_email
-    msg.set_content(body)
-    for name, content, mime in attachments:
-        msg.add_attachment(content, maintype=mime.split('/')[0], subtype=mime.split('/')[1], filename=name)
-    # SMTP
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as s:
-        s.ehlo()
-        s.starttls()
-        s.ehlo()
-        if SMTP_USER:
-            s.login(SMTP_USER, SMTP_PASS)
-        s.send_message(msg)
-
-@app.route("/admin/send-stats", methods=["POST"])
-@requires_auth
+@app.route('/admin/send-stats', methods=['POST'])
 def send_stats():
-    to_email = request.json.get("to") if request.json and "to" in request.json else "ialondonoo@eafit.edu.co"
-    df = fetch_data()
-    images = build_plots(df)
-    pdf_buf = build_pdf(images)
-    # attachments: add PDF and PNGs
-    attachments = []
-    attachments.append(("stats.pdf", pdf_buf.read(), "application/pdf"))
-    # send
-    pdf_buf.seek(0)
-    send_email(to_email, "Statistics Report", "Attached stats report.", [("stats.pdf", pdf_buf.read(), "application/pdf")])
-    return jsonify({"status":"sent","to":to_email})
+    """Endpoint principal para generar y enviar las estadísticas."""
+    # Opcional: Proteger este endpoint con una clave de API
+    # api_key = request.headers.get('X-API-KEY')
+    # if api_key != os.getenv("STATS_API_KEY"):
+    #     return jsonify({"error": "No autorizado"}), 401
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5010)
+    df = get_db_data()
+    if df is None or df.empty:
+        return jsonify({"error": "No se pudieron obtener datos o no hay datos para reportar."}), 500
+        
+    chart_buffer = create_stats_chart(df)
+    if chart_buffer is None:
+        return jsonify({"error": "No se pudo generar el gráfico."}), 500
+
+    try:
+        if EMAIL_PROVIDER == 'ses':
+            send_email_ses(chart_buffer)
+            provider_used = 'AWS SES'
+        elif EMAIL_PROVIDER == 'mailtrap':
+            send_email_mailtrap(chart_buffer)
+            provider_used = 'Mailtrap'
+        else:
+            return jsonify({"error": f"Proveedor de email no soportado: {EMAIL_PROVIDER}"}), 400
+        
+        return jsonify({"message": f"Estadísticas enviadas exitosamente a {RECIPIENT_EMAIL} usando {provider_used}."})
+
+    except Exception as e:
+        print(f"Error al enviar el correo: {e}")
+        return jsonify({"error": "Ocurrió un error al enviar el correo.", "details": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=True)

@@ -1,5 +1,7 @@
-Flask==2.3.2
-pandas==2.1.1
-matplotlib==3.8.1
-psycopg2-binary==2.9.7
-gunicorn
+Flask==3.0.3
+gunicorn==22.0.0
+psycopg2-binary==2.9.9
+pandas==2.2.2
+matplotlib==3.8.4
+boto3==1.34.107
+python-dotenv==1.0.1
