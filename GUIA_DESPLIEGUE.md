@@ -1436,4 +1436,5 @@ ssh -i "$SSH_KEY" "${SSH_USER}@${MANAGER_IP}" "docker service logs mystack_lb -f
 4.  **Configura el Clúster de Swarm (Paso 5):** Conéctate a las IPs generadas y ejecuta los comandos `docker swarm init`, `join` y `node update`.
 5.  **Crea el Secret y Despliega el Stack (Paso 6):** Reemplaza los placeholders en `docker-stack.yml` (tu usuario de Docker Hub), crea el `db_pass` en el manager y ejecuta `docker stack deploy`.
 
-Una vez completados estos 5 puntos, tu aplicación estará en línea y funcionando en AWS.
+
+

@@ -62,9 +62,10 @@ async def reverse_proxy(request: Request, path: str):
                     headers=request.headers.raw,
                     content=body,
                     params=request.query_params,
+                    timeout=5.0,
                 )
                 
-                rp_resp = await client.send(rp_req, timeout=5.0)
+                rp_resp = await client.send(rp_req)
 
                 # Si la respuesta es exitosa (ej. 2xx), la devuelve al cliente
                 # También consideramos 3xx (redirecciones) y 4xx (errores de cliente) como "exitosos"

@@ -1,54 +1,36 @@
-# ---- Build Stage ----
-# Etapa para instalar dependencias del sistema y de Python
-FROM python:3.9-slim as builder
+# =================================================================
+# DOCKERFILE PARA LA APLICACIÓN DE ESTADÍSTICAS
+# =================================================================
+# Construye la imagen para el servicio de estadísticas.
+# Instala dependencias de sistema necesarias para Matplotlib.
+# =================================================================
 
-# Instalar dependencias del sistema necesarias para matplotlib
-# - build-essential: para compilar paquetes
-# - libpq-dev: para psycopg2
-# - libfreetype6-dev, libpng-dev: para matplotlib
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# --- Etapa de Construcción ---
+# Usamos una imagen completa de Python sobre Debian (no 'slim') para tener 'apt'.
+FROM python:3.9
+
+# --- Instalación de Dependencias de Sistema ---
+# Matplotlib en un entorno 'headless' (sin interfaz gráfica) como Docker
+# requiere algunas librerías de sistema para renderizar gráficos.
+# - build-essential: Contiene compiladores y herramientas de desarrollo.
+# - libgl1-mesa-glx: Es una librería de renderizado de gráficos 3D.
+RUN apt-get update && apt-get install -y \
     build-essential \
-    libpq-dev \
-    libfreetype6-dev \
-    libpng-dev \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/app
+# --- Configuración del Entorno ---
+WORKDIR /app
 
-# Instalar dependencias de Python
-COPY requirements.txt ./
-RUN pip wheel --no-cache-dir --wheel-dir /usr/src/app/wheels -r requirements.txt
+# --- Instalación de Dependencias de Python ---
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-
-# ---- Final Stage ----
-# Etapa final con un entorno de ejecución limpio
-FROM python:3.9-slim
-
-# Instalar solo las dependencias de sistema necesarias para la ejecución
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    libfreetype6 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Crear usuario no-root
-RUN useradd --create-home appuser
-WORKDIR /home/appuser/app
-USER appuser
-
-# Copiar dependencias pre-compiladas
-COPY --from=builder /usr/src/app/wheels /wheels
-COPY --from=builder /usr/src/app/requirements.txt .
-RUN pip install --no-cache /wheels/*
-
-# Copiar el código de la aplicación
+# --- Copia del Código Fuente ---
 COPY . .
 
-# Exponer puerto
-EXPOSE 8000
-
-# Comando para ejecutar con Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "app:app"]
-
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:8000/ || exit 1
+# --- Comando de Ejecución ---
+# Expone el puerto 5000, donde correrá la aplicación Flask.
+EXPOSE 5000
+# Inicia la aplicación usando Gunicorn.
+CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:5000", "app:app"]

@@ -1,21 +1,29 @@
-version: '3.8'
+# ----------------------------------------------------
+# ARCHIVO DOCKER-COMPOSE PARA LA ARQUITECTURA COMPLETA
+# ----------------------------------------------------
+# Define los servicios, redes y volúmenes para la aplicación.
+# Ejecutar con: docker compose up -d --build
+# ----------------------------------------------------
+version: '3.9'
 
 services:
   # --- Base de Datos PostgreSQL ---
+  # Almacena todos los datos de la aplicación.
   db:
     image: postgres:14-alpine
     container_name: postgres_db
+    env_file: .env
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
     volumes:
-      # Monta el script de inicialización para crear la tabla al arrancar
-      - ./infra/schema.sql:/docker-entrypoint-initdb.d/init.sql
-      # Monta un volumen para persistir los datos de la base de datos
+      # Script para inicializar el esquema de la base de datos y las tablas.
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+      # Volumen para persistir los datos de PostgreSQL.
       - postgres_data:/var/lib/postgresql/data
     ports:
-      # Expone el puerto de la DB al host (opcional, útil para depuración con un cliente SQL)
+      # Expone el puerto de la DB al host solo para depuración. No es necesario para la operación normal.
       - "5432:5432"
     networks:
       - app-net
@@ -24,73 +32,89 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # --- Servidor Web 1 (Inglés) ---
-  web1:
+  # Sirve la versión en inglés de la aplicación web.
+  web-server-en:
     build:
       context: ./web_app
     container_name: web_app_en
-    env_file:
-      - ./.env
+    env_file: .env
     environment:
       - LANG=en
-      - DATABASE_URL=${DATABASE_URL}
+      - PORT=8000
     depends_on:
       db:
         condition: service_healthy
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
   # --- Servidor Web 2 (Español) ---
-  web2:
+  # Sirve la versión en español de la aplicación web.
+  web-server-es:
     build:
       context: ./web_app
     container_name: web_app_es
-    env_file:
-      - ./.env
+    env_file: .env
     environment:
       - LANG=es
-      - DATABASE_URL=${DATABASE_URL}
+      - PORT=8000
     depends_on:
       db:
         condition: service_healthy
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
-  # --- Servicio de Estadísticas ---
-  stats:
+  # --- Aplicación de Estadísticas ---
+  # Genera gráficos y envía reportes por correo.
+  stats-app:
     build:
       context: ./stats_app
     container_name: stats_app
-    env_file:
-      - ./.env
-    volumes:
-      - ./infra:/home/appuser/app/infra
+    env_file: .env
+    ports:
+      # Expuesto para poder invocar el endpoint de envío de correo.
+      - "5001:5000"
     depends_on:
       db:
         condition: service_healthy
     networks:
       - app-net
-    # No exponemos puertos, ya que solo se accede internamente o por demanda
+    restart: unless-stopped
 
-  # --- Balanceador de Carga ---
+  # --- Balanceador de Carga (Reverse Proxy) ---
+  # Punto de entrada único. Distribuye el tráfico a los servidores web.
   load-balancer:
     build:
       context: ./load_balancer
     container_name: load_balancer
-    environment:
-      # Pasamos los nombres de los servicios web como backends
-      - BACKEND_SERVERS=http://web1:8000,http://web2:8000
     ports:
-      # El único puerto expuesto al exterior
-      - "80:80"
-      # Puerto para métricas de Prometheus (opcional)
-      - "8100:8000" 
+      # Puerto principal de la aplicación, expuesto al exterior.
+      - "5050:80"
+    environment:
+      # Define los servidores backend a los que el balanceador redirigirá el tráfico.
+      - BACKEND_SERVERS=http://web-server-en:8000,http://web-server-es:8000
     depends_on:
-      - web1
-      - web2
+      web-server-en:
+        condition: service_healthy
+      web-server-es:
+        condition: service_healthy
     networks:
       - app-net
+    restart: unless-stopped
 
 # --- Volúmenes y Redes ---
 volumes:
